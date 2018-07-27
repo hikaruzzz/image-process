@@ -1,0 +1,256 @@
+//关键字：gamma矫正，bmp文件编码 解码 存储，
+
+#include<stdio.h>
+#include<stdlib.h>
+#include<iostream>
+#include<math.h>
+using namespace std;
+
+typedef unsigned char BYTE;
+typedef unsigned short WORD;
+typedef unsigned int DWORD;
+typedef long LONG;
+
+typedef struct  tagBITMAPFILEHEADER {
+	//WORD bfType;//（不要） 文件类型，必须是0x424D，即字符“BM”  
+	//不包含文件类型信息（由于结构体的内存结构决定,要是加了的话将不能正确读取文件信息） 
+	DWORD bfSize;//文件大小   
+	WORD bfReserved1;//保留字   
+	WORD bfReserved2;//保留字   
+	DWORD bfOffBits;//从文件头到实际位图数据的偏移字节数   
+}BITMAPFILEHEADER;//位图文件头定义。这个结构的长度是固定的，为14个字节
+
+
+typedef struct tagBITMAPINFOHEADER {
+	DWORD biSize;//信息头（此结构体）大小（为40）
+	LONG biWidth;//图像宽度   
+	LONG biHeight;//图像高度   
+	WORD biPlanes;//位平面数，必须为1   
+	WORD biBitCount;//位数，常用值：1（黑白），4（16色），8（256色），24（真彩色）   
+	DWORD  biCompression; //压缩类型（BI_RGB=0,BI_RLE8...)   
+	DWORD  biSizeImage; //图像位图数据字节数   
+	LONG  biXPelsPerMeter; //设备水平分辨率   
+	LONG  biYPelsPerMeter; //设备垂直分辨率   
+	DWORD  biClrUsed; // 实际使用的调色板索引数， 0：使用所有的调色板索引
+	DWORD  biClrImportant; //本位图中重要的色彩数（若=0，则所有颜色都重要）  
+}BITMAPINFOHEADER; //位图信息头定义（固定结构）   
+
+
+typedef struct tagRGBQUAD {
+	BYTE rgbBlue; //该颜色的蓝色分量   
+	BYTE rgbGreen; //该颜色的绿色分量   
+	BYTE rgbRed; //该颜色的红色分量   
+	BYTE rgbReserved; //保留值   
+}RGBQUAD;//调色板位图：4，8位图像才会使用调色板数据，16,24,32位图像不需要调色板数据，即调色板最多只需要256项
+//调色板：某个点应该用rgb多少来显示
+//biBitCount=1时，2色图，有2个这样的结构，2*4 = 8bit（即rgb=0,0,0和rgb=255，255，255两种）
+//biBitCount=4时，16色图，有16个这样的结构，2*16 = 32bit
+//biBitCount=8时，256色图，1024bit
+
+typedef struct tagIMAGEDATA
+{
+	BYTE red;
+	BYTE green;
+	BYTE blue;
+}IMAGEDATA;//像素信息  
+
+//变量定义   
+BITMAPFILEHEADER strHead;
+RGBQUAD strPla[256];//256色调色板   
+BITMAPINFOHEADER strInfo;
+IMAGEDATA imagedata[256][256];//存储像素信息（长*宽）   
+
+
+IMAGEDATA gammaChange(IMAGEDATA rgb, float gammaNum)
+{
+	//gamma函数 公式（30R+59G+11B)/100
+	float r, g, b;
+
+	//gray = (rgb.red * 30 +  rgb.green * 59 + rgb.blue*11) / 100;
+	r = (int(rgb.red) + 0.5) / 256; //归一化
+	g = (int(rgb.green) + 0.5) / 256;
+	b = (int(rgb.blue) + 0.5) / 256;
+
+	r = pow(r, (1 / gammaNum));//预补偿
+	g = pow(g, (1 / gammaNum));
+	b = pow(b, (1 / gammaNum));
+
+	rgb.red = r * 256 - 0.5; //反归一化
+	rgb.green = g * 256 - 0.5;
+	rgb.blue = b * 256 - 0.5;
+	 
+	return rgb;
+}
+
+
+//显示位图文件头信息   
+void showBmpHead(tagBITMAPFILEHEADER pBmpHead) {
+	cout << "位图文件头:" << endl;
+	//cout<<"bfType value is "<<hex<<pBmpHead.bfType<<endl; //闲置，BmpHead结构中没有，但文件头有bfType
+	cout << "文件大小:" << pBmpHead.bfSize << endl;
+	cout << "保留字_1:" << pBmpHead.bfReserved1 << endl;
+	cout << "保留字_2:" << pBmpHead.bfReserved2 << endl;
+	cout << "实际位图数据的偏移字节数:" << pBmpHead.bfOffBits << endl << endl; //endl x2 == 回车x2
+}
+
+
+void showBmpInforHead(tagBITMAPINFOHEADER pBmpInforHead) {
+	cout << "位图信息头:" << endl;
+	cout << "结构体的长度:" << pBmpInforHead.biSize << endl;
+	cout << "位图宽:" << pBmpInforHead.biWidth << endl;
+	cout << "位图高:" << pBmpInforHead.biHeight << endl;
+	cout << "biPlanes平面数:" << pBmpInforHead.biPlanes << endl;
+	cout << "biBitCount采用颜色位数:" << pBmpInforHead.biBitCount << endl;
+	cout << "压缩方式:" << pBmpInforHead.biCompression << endl;
+	cout << "biSizeImage实际位图数据占用的字节数:" << pBmpInforHead.biSizeImage << endl;
+	cout << "X方向分辨率:" << pBmpInforHead.biXPelsPerMeter << endl;
+	cout << "Y方向分辨率:" << pBmpInforHead.biYPelsPerMeter << endl;
+	cout << "使用的颜色数:" << pBmpInforHead.biClrUsed << endl;
+	cout << "重要颜色数:" << pBmpInforHead.biClrImportant << endl;
+}
+
+tagRGBQUAD* ReadFile(char *strFile,int isShow,int isChange) {
+	FILE *fpi, *fpw;
+	fpi = fopen(strFile, "rb");
+	if (fpi != NULL) {
+		//先读取文件类型   
+		WORD bfType;
+		fread(&bfType, 1, sizeof(WORD), fpi); //每次 fread，fpi指针指向下一个（跨度为WORD)
+		cout << "bfType:0x" << hex<<bfType<<endl;
+		if (0x4d42 != bfType) {
+			cout << "the file is not a bmp file!" << endl;
+			return NULL;
+		}
+		//读取bmp文件的文件头和信息头
+		fread(&strHead, 1, sizeof(tagBITMAPFILEHEADER), fpi); //文件头也是结构体？直接读出来转成strHead结构？
+		showBmpHead(strHead);//显示文件头   
+		fread(&strInfo, 1, sizeof(tagBITMAPINFOHEADER), fpi);
+		showBmpInforHead(strInfo);//显示文件信息头   
+
+		////读取调色板 (biClrUsed通常=0）
+		//for (int nCounti = 0; nCounti<strInfo.biClrUsed; nCounti++)  
+		//{
+		//	//存储的时候，一般去掉保留字rgbReserved   
+		//	fread((char *)&strPla[nCounti].rgbBlue, 1, sizeof(BYTE), fpi);  //（char *）强制转换成char型指针。（注意与&的顺序）
+		//	fread((char *)&strPla[nCounti].rgbGreen, 1, sizeof(BYTE), fpi);
+		//	fread((char *)&strPla[nCounti].rgbRed, 1, sizeof(BYTE), fpi);
+		//	cout << "strPla[nCounti].rgbBlue" << strPla[nCounti].rgbBlue << endl;
+		//	cout << "strPla[nCounti].rgbGreen" << strPla[nCounti].rgbGreen << endl;
+		//	cout << "strPla[nCounti].rgbRed" << strPla[nCounti].rgbRed << endl;
+		//}
+
+		//读出图片的像素数据   
+		memset(imagedata, 0, sizeof(IMAGEDATA) * strInfo.biWidth * strInfo.biHeight); //长*宽 *3色  内存赋值函数，用来给imagedata内存空间（sizeof那些）进行赋值0
+		fread(imagedata, sizeof(IMAGEDATA) * strInfo.biWidth, strInfo.biHeight, fpi); //块长度，块数量
+		//for(int i = 0;i < strInfo.biWidth;++i)
+		cout << "=========================\n是否显示画面前10行数据:" ;
+		scanf_s("%d", &isShow);
+		if (isShow == 1)
+		{
+			for (int i = strInfo.biHeight; i > 253; i--)//只输出第n行数据   
+			{
+				cout << "\n------------图像第" << dec << strInfo.biHeight - i + 1 << "行数据--------------" << endl;
+				for (int j = 0; j < strInfo.biWidth; ++j)
+				{
+					printf("%d %d %d\t", imagedata[i][j].red, imagedata[i][j].green, imagedata[i][j].blue);
+					if (( j + 1) % 5 == 0) 
+						cout << endl;
+				}
+			}
+		}
+		fclose(fpi);
+	}
+	else {
+		cout << "file open error!" << endl;
+		return NULL;
+	}
+
+	//改变&&保存bmp图片
+	if (isChange == 1) 
+	{
+
+		if ((fpw = fopen("test_new.bmp", "wb")) == NULL) 
+		{
+			cout << "create the bmp file error!" << endl;
+			return NULL;
+		}
+		////////////////////////////////gamma 矫正
+		
+		float gammaN = 1, deepDarkN=1;
+		printf("\n==================================\n输入gamma值:");
+		scanf_s("%f", &gammaN);
+		//scanf_s("%f", &deepDarkN);
+		IMAGEDATA gammaChange(IMAGEDATA rgb, float gammaNum);
+		//IMAGEDATA deepDark(IMAGEDATA rgb, float darkNum);
+
+		for (int i = 0; i < strInfo.biWidth; ++i)
+		/*for (int i = 0; i < 2; ++i)*/
+		{
+			for (int j = 0; j < strInfo.biHeight; ++j)
+			{
+				if (gammaN > 0)
+				imagedata[i][j] = gammaChange(imagedata[i][j],gammaN);
+				//imagedata[i][j] = deepDark(imagedata[i][j], deepDarkN);
+			}
+		}
+
+
+		/////////////////////////////////////////
+		//保存文件头
+		WORD bfType = 0x4d42;
+		fwrite(&bfType, 1, sizeof(WORD), fpw); //块长度，块数量
+		//fpw +=2;   
+		fwrite(&strHead, 1, sizeof(tagBITMAPFILEHEADER), fpw);
+		fwrite(&strInfo, 1, sizeof(tagBITMAPINFOHEADER), fpw);
+		//保存调色板数据   
+		for (int nCounti = 0; nCounti<strInfo.biClrUsed; nCounti++) 
+		{
+			fwrite(&strPla[nCounti].rgbBlue, 1, sizeof(BYTE), fpw);
+			fwrite(&strPla[nCounti].rgbGreen, 1, sizeof(BYTE), fpw);
+			fwrite(&strPla[nCounti].rgbRed, 1, sizeof(BYTE), fpw);
+		}
+		//保存像素数据   
+		for (int i = 0; i < strInfo.biWidth; ++i) 
+		{
+			for (int j = 0; j < strInfo.biHeight; ++j) {
+				fwrite(&imagedata[i][j].blue, 1, sizeof(BYTE), fpw);
+				fwrite(&imagedata[i][j].green, 1, sizeof(BYTE), fpw);
+				fwrite(&imagedata[i][j].red, 1, sizeof(BYTE), fpw);
+			}
+		}
+		fclose(fpw);
+	}
+	
+}
+
+IMAGEDATA deepDark(IMAGEDATA rgb, float darkNum)
+{
+	//暗部加深（负数时变白）
+	if (darkNum>0)
+	{ 
+		if (rgb.red < darkNum && rgb.green < darkNum && rgb.blue < darkNum)
+		{
+			rgb.red = 0;
+			rgb.green = 0;
+			rgb.blue = 0;
+		}
+	}
+	else
+	{
+		darkNum = -darkNum;
+		if (rgb.red < darkNum && rgb.green < darkNum && rgb.blue < darkNum)
+		{
+			rgb = gammaChange(rgb, 3.5);
+		}
+	}
+	return rgb;
+}
+
+
+
+void main() {
+	char strFile[30] = "./test4.bmp";//bmp文件名
+	ReadFile(strFile,0,1);
+	system("pause");
+}
+
