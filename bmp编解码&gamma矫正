@@ -1,9 +1,12 @@
-//关键字：gamma矫正，bmp文件编码 解码 存储，
+//关键字：gamma矫正，bmp文件编码 解码 存储，去噪磨皮（局部均方差去噪）
 
+#define _CRT_SECURE_NO_WARNINGS
 #include<stdio.h>
 #include<stdlib.h>
 #include<iostream>
 #include<math.h>
+#include<opencv2/opencv.hpp>
+using namespace cv;
 using namespace std;
 
 typedef unsigned char BYTE;
@@ -58,27 +61,100 @@ typedef struct tagIMAGEDATA
 BITMAPFILEHEADER strHead;
 RGBQUAD strPla[256];//256色调色板   
 BITMAPINFOHEADER strInfo;
-IMAGEDATA imagedata[256][256];//存储像素信息（长*宽）   
+IMAGEDATA imagedata[256][256];//存储像素信息（长*宽）   [全局数组
 
+IMAGEDATA awbChange(IMAGEDATA rgb, float awbNum)
+{
+	//白平衡
+	rgb.red = int(rgb.red)*awbNum;
+	//rgb.green = int(rgb.green)*awbNum;
+	rgb.blue = int(rgb.blue)/awbNum;
+	
+	return rgb;
+}
+
+void deNoise( float deNoiseNum,int Size)
+{
+	
+	//去噪（基于 局部均方差的图像去噪声算法）
+	//https://blog.csdn.net/lz0499/article/details/77148182
+
+	for (int i = Size / 2; i < strInfo.biHeight - Size / 2; i++)
+	{
+		for (int j = Size / 2; j < strInfo.biWidth - Size/ 2; j++)
+		{
+			int index = 1;
+			float sumR2 = 0,sumG2 = 0,sumB2 = 0;
+			float sumR = 0, sumG = 0, sumB = 0;
+			float meanR = 0, varR = 0;
+			float meanG = 0, varG = 0;
+			float meanB = 0, varB = 0;
+			float kr, kg, kb;
+
+			for (int m = -Size/2;m<= Size/2;m++)
+			{  
+				for (int n = -Size / 2; n <= Size / 2; n++)
+				{
+					sumR += int(imagedata[i + m][j + n].red);
+					//printf("%d\n", imagedata[i + m][j + n].red);
+					
+					sumG += imagedata[i + m][j + n].green;
+					sumB += imagedata[i + m][j + n].blue;
+					sumR2 += imagedata[i + m][j + n].red*imagedata[i + m][j + n].red;
+					sumG2 += imagedata[i + m][j + n].green*imagedata[i + m][j + n].green;
+					sumB2 += imagedata[i + m][j + n].blue*imagedata[i + m][j + n].blue;
+
+				}
+				
+			}
+			//平均值
+			meanR = sumR / Size/Size;
+			meanG = sumG / Size/Size;
+			meanB = sumB / Size/Size;
+
+			if(1)
+			{
+				//方差
+				varR = (sumR2 - (sumR*sumR) / Size/Size) / Size/Size;
+				varG = (sumG2 - (sumG*sumG) / Size/Size) / Size/Size;
+				varB = (sumB2 - (sumB*sumB) / Size/Size) / Size/Size;
+				kr = varR / (varR + deNoiseNum);
+				kg = varG / (varG + deNoiseNum);
+				kb = varB / (varB + deNoiseNum);
+
+				//printf("oringe = %d\nkr=%f", imagedata[i][j].red,kr);
+				imagedata[i][j].red = (1-kr)*meanR+kr*imagedata[i][j].red;
+				//printf("\nover = %d\nkmean=%f\n", imagedata[i][j].red,meanR);
+				//system("pause");
+				imagedata[i][j].green = (1 - kg)*meanG + kg * imagedata[i][j].green;
+				imagedata[i][j].blue = (1 - kb)*meanB + kb * imagedata[i][j].blue;
+			}
+			
+		}
+	}
+	
+	
+}
 
 IMAGEDATA gammaChange(IMAGEDATA rgb, float gammaNum)
 {
 	//gamma函数 公式（30R+59G+11B)/100
 	float r, g, b;
+	
+	if (1)
+	{//gray = (rgb.red * 30 +  rgb.green * 59 + rgb.blue*11) / 100;
+		r = (int(rgb.red) + 0.5) / 256; //归一化
+		g = (int(rgb.green) + 0.5) / 256;
+		b = (int(rgb.blue) + 0.5) / 256;
 
-	//gray = (rgb.red * 30 +  rgb.green * 59 + rgb.blue*11) / 100;
-	r = (int(rgb.red) + 0.5) / 256; //归一化
-	g = (int(rgb.green) + 0.5) / 256;
-	b = (int(rgb.blue) + 0.5) / 256;
+		r = pow(r, (1 / gammaNum));//预补偿
+		g = pow(g, (1 / gammaNum));
+		b = pow(b, (1 / gammaNum));
 
-	r = pow(r, (1 / gammaNum));//预补偿
-	g = pow(g, (1 / gammaNum));
-	b = pow(b, (1 / gammaNum));
-
-	rgb.red = r * 256 - 0.5; //反归一化
-	rgb.green = g * 256 - 0.5;
-	rgb.blue = b * 256 - 0.5;
-	 
+		rgb.red = r * 256 - 0.5; //反归一化
+		rgb.green = g * 256 - 0.5;
+		rgb.blue = b * 256 - 0.5;
+	}
 	return rgb;
 }
 
@@ -93,7 +169,7 @@ void showBmpHead(tagBITMAPFILEHEADER pBmpHead) {
 	cout << "实际位图数据的偏移字节数:" << pBmpHead.bfOffBits << endl << endl; //endl x2 == 回车x2
 }
 
-
+//消息头
 void showBmpInforHead(tagBITMAPINFOHEADER pBmpInforHead) {
 	cout << "位图信息头:" << endl;
 	cout << "结构体的长度:" << pBmpInforHead.biSize << endl;
@@ -107,6 +183,51 @@ void showBmpInforHead(tagBITMAPINFOHEADER pBmpInforHead) {
 	cout << "Y方向分辨率:" << pBmpInforHead.biYPelsPerMeter << endl;
 	cout << "使用的颜色数:" << pBmpInforHead.biClrUsed << endl;
 	cout << "重要颜色数:" << pBmpInforHead.biClrImportant << endl;
+}
+
+void readFile(char *strFile)
+{
+	FILE *fpi, *fpw;
+	fpi = fopen(strFile, "rb");
+	if (fpi != NULL) {
+		//先读取文件类型   
+		WORD bfType;
+		fread(&bfType, 1, sizeof(WORD), fpi); //每次 fread，fpi指针指向下一个（跨度为WORD)
+		cout << "bfType:0x" << hex << bfType << endl;
+		if (0x4d42 != bfType) {
+			cout << "the file is not a bmp file!" << endl;
+			
+		}
+		//读取bmp文件的文件头和信息头
+		fread(&strHead, 1, sizeof(tagBITMAPFILEHEADER), fpi); //文件头也是结构体？直接读出来转成strHead结构？
+		showBmpHead(strHead);//显示文件头   
+		fread(&strInfo, 1, sizeof(tagBITMAPINFOHEADER), fpi);
+		showBmpInforHead(strInfo);//显示文件信息头   
+
+								  ////读取调色板 (biClrUsed通常=0）
+								  //for (int nCounti = 0; nCounti<strInfo.biClrUsed; nCounti++)  
+								  //{
+								  //	//存储的时候，一般去掉保留字rgbReserved   
+								  //	fread((char *)&strPla[nCounti].rgbBlue, 1, sizeof(BYTE), fpi);  //（char *）强制转换成char型指针。（注意与&的顺序）
+								  //	fread((char *)&strPla[nCounti].rgbGreen, 1, sizeof(BYTE), fpi);
+								  //	fread((char *)&strPla[nCounti].rgbRed, 1, sizeof(BYTE), fpi);
+								  //	cout << "strPla[nCounti].rgbBlue" << strPla[nCounti].rgbBlue << endl;
+								  //	cout << "strPla[nCounti].rgbGreen" << strPla[nCounti].rgbGreen << endl;
+								  //	cout << "strPla[nCounti].rgbRed" << strPla[nCounti].rgbRed << endl;
+								  //}
+
+								  //读出图片的像素数据   
+		memset(imagedata, 0, sizeof(IMAGEDATA) * strInfo.biWidth * strInfo.biHeight); //长*宽 *3色  内存赋值函数，用来给imagedata内存空间（sizeof那些）进行赋值0
+		fread(imagedata, sizeof(IMAGEDATA) * strInfo.biWidth, strInfo.biHeight, fpi); //块长度，块数量
+																					  //for(int i = 0;i < strInfo.biWidth;++i)
+		cout << "=========================\n是否显示画面前10行数据:";
+	
+		fclose(fpi);
+	}
+	else {
+		cout << "file open error!" << endl;
+
+	}
 }
 
 tagRGBQUAD* ReadFile(char *strFile,int isShow,int isChange) {
@@ -145,6 +266,8 @@ tagRGBQUAD* ReadFile(char *strFile,int isShow,int isChange) {
 		//for(int i = 0;i < strInfo.biWidth;++i)
 		cout << "=========================\n是否显示画面前10行数据:" ;
 		scanf_s("%d", &isShow);
+			
+
 		if (isShow == 1)
 		{
 			for (int i = strInfo.biHeight; i > 253; i--)//只输出第n行数据   
@@ -169,18 +292,19 @@ tagRGBQUAD* ReadFile(char *strFile,int isShow,int isChange) {
 	if (isChange == 1) 
 	{
 
-		if ((fpw = fopen("test_new.bmp", "wb")) == NULL) 
+		if ((fpw = fopen("./test/test_new.bmp", "wb")) == NULL) 
 		{
 			cout << "create the bmp file error!" << endl;
 			return NULL;
 		}
 		////////////////////////////////gamma 矫正
 		
-		float gammaN = 1, deepDarkN=1;
+		float gammaN = 1, deepDarkN=1,awbN = 1;
 		printf("\n==================================\n输入gamma值:");
 		scanf_s("%f", &gammaN);
 		//scanf_s("%f", &deepDarkN);
-		IMAGEDATA gammaChange(IMAGEDATA rgb, float gammaNum);
+		scanf_s("%f", &awbN);
+		IMAGEDATA gammaChange(IMAGEDATA , float );
 		//IMAGEDATA deepDark(IMAGEDATA rgb, float darkNum);
 
 		for (int i = 0; i < strInfo.biWidth; ++i)
@@ -189,8 +313,13 @@ tagRGBQUAD* ReadFile(char *strFile,int isShow,int isChange) {
 			for (int j = 0; j < strInfo.biHeight; ++j)
 			{
 				if (gammaN > 0)
-				imagedata[i][j] = gammaChange(imagedata[i][j],gammaN);
+				{ 
+					imagedata[i][j] = gammaChange(imagedata[i][j], gammaN);
+				}
+				
+				
 				//imagedata[i][j] = deepDark(imagedata[i][j], deepDarkN);
+				//imagedata[i][j] = awbChange(imagedata[i][j], awbN);
 			}
 		}
 
@@ -203,24 +332,48 @@ tagRGBQUAD* ReadFile(char *strFile,int isShow,int isChange) {
 		fwrite(&strHead, 1, sizeof(tagBITMAPFILEHEADER), fpw);
 		fwrite(&strInfo, 1, sizeof(tagBITMAPINFOHEADER), fpw);
 		//保存调色板数据   
-		for (int nCounti = 0; nCounti<strInfo.biClrUsed; nCounti++) 
+		/*for (int nCounti = 0; nCounti<strInfo.biClrUsed; nCounti++) 
 		{
 			fwrite(&strPla[nCounti].rgbBlue, 1, sizeof(BYTE), fpw);
 			fwrite(&strPla[nCounti].rgbGreen, 1, sizeof(BYTE), fpw);
 			fwrite(&strPla[nCounti].rgbRed, 1, sizeof(BYTE), fpw);
-		}
+		}*/
 		//保存像素数据   
 		for (int i = 0; i < strInfo.biWidth; ++i) 
 		{
 			for (int j = 0; j < strInfo.biHeight; ++j) {
-				fwrite(&imagedata[i][j].blue, 1, sizeof(BYTE), fpw);
-				fwrite(&imagedata[i][j].green, 1, sizeof(BYTE), fpw);
 				fwrite(&imagedata[i][j].red, 1, sizeof(BYTE), fpw);
+				fwrite(&imagedata[i][j].green, 1, sizeof(BYTE), fpw);
+				fwrite(&imagedata[i][j].blue, 1, sizeof(BYTE), fpw);
 			}
 		}
 		fclose(fpw);
 	}
 	
+}
+
+void writeFile()
+{
+	FILE *fpw;
+	if ((fpw = fopen("./test/test_new.bmp", "wb")) == NULL)
+	{
+		cout << "create the bmp file error!" << endl;
+		
+	}
+	WORD bfType = 0x4d42;
+	fwrite(&bfType, 1, sizeof(WORD), fpw); //块长度，块数量
+									 
+	fwrite(&strHead, 1, sizeof(tagBITMAPFILEHEADER), fpw);
+	fwrite(&strInfo, 1, sizeof(tagBITMAPINFOHEADER), fpw);
+	for (int i = 0; i < strInfo.biWidth; ++i)
+	{
+		for (int j = 0; j < strInfo.biHeight; ++j) {
+			fwrite(&imagedata[i][j].red, 1, sizeof(BYTE), fpw);
+			fwrite(&imagedata[i][j].green, 1, sizeof(BYTE), fpw);
+			fwrite(&imagedata[i][j].blue, 1, sizeof(BYTE), fpw);
+		}
+	}
+	fclose(fpw);
 }
 
 IMAGEDATA deepDark(IMAGEDATA rgb, float darkNum)
@@ -247,10 +400,19 @@ IMAGEDATA deepDark(IMAGEDATA rgb, float darkNum)
 }
 
 
-
 void main() {
-	char strFile[30] = "./test4.bmp";//bmp文件名
-	ReadFile(strFile,0,1);
+	char strFile[40] = "./test/test2.bmp";//bmp文件名
+	if (0)
+	{
+		ReadFile(strFile, 0, 1);
+	}
+
+	readFile(strFile);
+	if (1)
+
+	{
+		deNoise(30,9); //画面噪点越密，这个σ值就应该越小，因为方差都很小（相机夜拍）
+	}
+	writeFile();
 	system("pause");
 }
-
