@@ -1,4 +1,4 @@
-# image-process
+# image_video_process
 图像处理
 opencv的VS环境安装：https://www.cnblogs.com/linshuhe/p/5764394.html
                   项目属性Microsoft.Cpp.x64.user 》VC++目录》 包含目录》opencv\build\include && opencv\build\include\opencv && opencv2
